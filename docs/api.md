@@ -109,4 +109,5 @@ This endpoint is intended for downstream discovery and dashboarding before calli
 - use `updated_since` for efficient incremental syncs
 - do not depend on source-specific extras beyond the documented stable fields
 - use your Supabase `Publishable key` when calling the public function endpoints
+- direct PostgREST access to internal tables or helper views is not part of the public contract and should be treated as unsupported
 - the public functions are deployed with `--no-verify-jwt` and validate the publishable key from either `apikey` or `Authorization: Bearer ...`

@@ -259,6 +259,7 @@ Authorization: Bearer <SUPABASE_PUBLISHABLE_KEY>
 ## Downstream API Usage
 
 Downstream repos should call the public Edge Functions only. Do not read internal tables directly.
+`SUPABASE_PUBLISHABLE_KEY` is safe to distribute to downstream repos because `anon` access is limited to read-only Edge Functions, not base tables or REST access to helper views.
 
 Base URL:
 

@@ -106,6 +106,8 @@ This table is optional in production. If retained, apply a retention policy.
 ## Access Model
 
 - harvester workflows write using `service_role`
-- read-only clients consume views or Edge Functions with restricted fields
+- read-only clients consume public Edge Functions with restricted fields
+- `anon` and `authenticated` do not receive direct privileges on base tables
+- versioned public contracts are exposed by Edge Functions, not direct REST access to helper views
 - RLS stays enabled on base tables
 - public-facing contracts stay versioned above the storage layer
