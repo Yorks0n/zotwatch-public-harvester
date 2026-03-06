@@ -1,0 +1,5 @@
+httpx>=0.28,<0.29
+pydantic>=2.10,<3
+python-dateutil>=2.9,<3
+supabase>=2.15,<3
+typer>=0.16,<0.17
