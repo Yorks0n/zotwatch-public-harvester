@@ -32,6 +32,7 @@ from src.normalize.models import NormalizedWork
 
 
 STALE_RUNNING_THRESHOLD = timedelta(hours=2)
+PAUSED_SOURCES = {"openalex"}
 
 
 def run_harvest_all() -> None:
@@ -46,6 +47,10 @@ def run_harvest_all() -> None:
         OpenAlexFetcher(),
     ]
     for fetcher in fetchers:
+        if fetcher.source_name in PAUSED_SOURCES:
+            _log(fetcher.source_name, "skipped paused_source=true")
+            continue
+
         source_config = enabled_sources.get(fetcher.source_name)
         if not source_config:
             continue

@@ -142,7 +142,8 @@ The current implementation runs:
 - `arxiv`: incremental fetch by `submittedDate` window
 - `biorxiv`: incremental fetch by date-window details API
 - `medrxiv`: incremental fetch by date-window details API
-- `openalex`: incremental fetch by publication-date window
+
+`openalex` harvesting is currently paused and new OpenAlex records are not fetched or written during `harvest-all`.
 
 ## GitHub Actions Setup
 
@@ -175,7 +176,8 @@ The repository currently harvests these public sources:
 - `arxiv`
 - `biorxiv`
 - `medrxiv`
-- `openalex`
+
+`openalex` remains configured in `public.sources` for future re-enable, but it is currently paused.
 
 Each source writes to the same canonical `works` table and records operational metadata in `fetch_runs` and `source_cursors`.
 
@@ -195,10 +197,7 @@ Local runs and GitHub Actions runs print per-source progress logs with:
 Example:
 
 ```text
-[2026-03-06T06:20:00Z] [openalex] fetched raw_count=1329
-[2026-03-06T06:20:01Z] [openalex] normalized valid_count=1200 filtered_count=129
-[2026-03-06T06:20:01Z] [openalex] deduped count=1188 removed_duplicates=12
-[2026-03-06T06:20:03Z] [openalex] upserted inserted=1188 updated=0 total=1188
+[2026-04-01T02:30:00Z] [openalex] skipped paused_source=true
 ```
 
 ## Required Secrets
@@ -208,7 +207,7 @@ Example:
 - `SUPABASE_URL`: Supabase project URL
 - `SUPABASE_SECRET_KEY`: write-capable key for this harvester repo
 - `CROSSREF_MAILTO`: contact email sent with Crossref requests
-- `OPENALEX_MAILTO`: contact email sent with OpenAlex requests, optional if you reuse `CROSSREF_MAILTO`
+- `OPENALEX_MAILTO`: optional only if OpenAlex harvesting is re-enabled later
 - `WORK_RETENTION_DAYS`: optional retention window for `works`, based on `last_seen_at`
 - `FETCH_RUN_RETENTION_DAYS`: optional retention window for old completed `fetch_runs`
 - `RAW_PAYLOAD_RETENTION_DAYS`: optional retention window for `raw_payloads`
@@ -532,9 +531,9 @@ To prevent unbounded database growth, the harvester now runs cleanup after each 
 
 Default values:
 
-- `WORK_RETENTION_DAYS=90`
-- `FETCH_RUN_RETENTION_DAYS=30`
-- `RAW_PAYLOAD_RETENTION_DAYS=7`
+- `WORK_RETENTION_DAYS=3`
+- `FETCH_RUN_RETENTION_DAYS=3`
+- `RAW_PAYLOAD_RETENTION_DAYS=1`
 
 The cleanup command can also be run independently:
 

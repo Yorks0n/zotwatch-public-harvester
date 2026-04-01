@@ -4,7 +4,7 @@ values
     ('arxiv', 'arxiv', true, '{"cursor_key":"updated_from"}'::jsonb),
     ('biorxiv', 'biorxiv', true, '{"cursor_key":"updated_from"}'::jsonb),
     ('medrxiv', 'medrxiv', true, '{"cursor_key":"updated_from"}'::jsonb),
-    ('openalex', 'openalex', true, '{"cursor_key":"cursor"}'::jsonb)
+    ('openalex', 'openalex', false, '{"cursor_key":"cursor"}'::jsonb)
 on conflict (id) do update
 set
     name = excluded.name,
