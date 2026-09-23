@@ -123,30 +123,33 @@ def _run_crossref_harvest(*, client, fetcher: CrossrefFetcher, cursor_key: str) 
         f"start run_id={run_id} window_start={_format_dt(window_start)} window_end={_format_dt(window_end)}",
     )
 
-    raw_items: list[dict[str, object]] = []
+    fetched_count = 0
     normalized_count = 0
     inserted_count = 0
     updated_count = 0
     try:
-        raw_items = fetcher.fetch(FetchWindow(start=window_start, end=window_end, cursor=cursor_value))
-        _log(fetcher.source_name, f"fetched raw_count={len(raw_items)}")
-        normalized = [_normalize_crossref_item(item) for item in raw_items]
-        valid_normalized = [item for item in normalized if item is not None]
-        filtered_count = len(raw_items) - len(valid_normalized)
-        _log(
-            fetcher.source_name,
-            f"normalized valid_count={len(valid_normalized)} filtered_count={filtered_count}",
-        )
-        normalized = valid_normalized
-        deduped = dedupe_works(normalized)
-        _log(fetcher.source_name, f"deduped count={len(deduped)} removed_duplicates={len(normalized) - len(deduped)}")
-        result = upsert_works(client, deduped)
-        normalized_count = len(deduped)
-        inserted_count = result["inserted"]
-        updated_count = result["updated"]
-        _log(
-            fetcher.source_name,
-            f"upserted inserted={inserted_count} updated={updated_count} total={result['total']}",
+        for page in fetcher.iter_pages(FetchWindow(start=window_start, end=window_end, cursor=cursor_value)):
+            fetched_count += len(page)
+            normalized = [_normalize_crossref_item(item) for item in page]
+            valid_normalized = [item for item in normalized if item is not None]
+            deduped = dedupe_works(valid_normalized)
+            result = upsert_works(client, deduped)
+            normalized_count += len(deduped)
+            inserted_count += result["inserted"]
+            updated_count += result["updated"]
+            _log(
+                fetcher.source_name,
+                f"page fetched={len(page)} filtered={len(page) - len(valid_normalized)} "
+                f"deduped={len(deduped)} inserted={result['inserted']} updated={result['updated']}",
+            )
+        finish_fetch_run(
+            client,
+            run_id,
+            status="success",
+            fetched_count=fetched_count,
+            normalized_count=normalized_count,
+            inserted_count=inserted_count,
+            updated_count=updated_count,
         )
         upsert_source_cursor(
             client,
@@ -155,21 +158,12 @@ def _run_crossref_harvest(*, client, fetcher: CrossrefFetcher, cursor_key: str) 
             cursor_value=window_end.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         )
         _log(fetcher.source_name, f"cursor_updated key={cursor_key}")
-        finish_fetch_run(
-            client,
-            run_id,
-            status="success",
-            fetched_count=len(raw_items),
-            normalized_count=normalized_count,
-            inserted_count=inserted_count,
-            updated_count=updated_count,
-        )
         _log(fetcher.source_name, f"completed run_id={run_id} status=success")
     except Exception as exc:
         _fail_run(
             client=client,
             run_id=run_id,
-            fetched_count=len(raw_items),
+            fetched_count=fetched_count,
             normalized_count=normalized_count,
             inserted_count=inserted_count,
             updated_count=updated_count,
