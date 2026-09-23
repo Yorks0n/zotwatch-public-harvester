@@ -21,9 +21,9 @@ jobs:
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       OPENALEX_MAILTO: ${{ secrets.OPENALEX_MAILTO }}
       CROSSREF_MAILTO: ${{ secrets.CROSSREF_MAILTO }}
-      WORK_RETENTION_DAYS: ${{ vars.WORK_RETENTION_DAYS || '90' }}
-      FETCH_RUN_RETENTION_DAYS: ${{ vars.FETCH_RUN_RETENTION_DAYS || '30' }}
-      RAW_PAYLOAD_RETENTION_DAYS: ${{ vars.RAW_PAYLOAD_RETENTION_DAYS || '7' }}
+      WORK_RETENTION_DAYS: ${{ vars.WORK_RETENTION_DAYS }}
+      FETCH_RUN_RETENTION_DAYS: ${{ vars.FETCH_RUN_RETENTION_DAYS }}
+      RAW_PAYLOAD_RETENTION_DAYS: ${{ vars.RAW_PAYLOAD_RETENTION_DAYS }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -10,9 +10,9 @@ from supabase import Client
 from src.db.client import get_supabase_client
 
 
-DEFAULT_WORK_RETENTION_DAYS = 3
-DEFAULT_FETCH_RUN_RETENTION_DAYS = 3
-DEFAULT_RAW_PAYLOAD_RETENTION_DAYS = 1
+DEFAULT_WORK_RETENTION_DAYS = 90
+DEFAULT_FETCH_RUN_RETENTION_DAYS = 30
+DEFAULT_RAW_PAYLOAD_RETENTION_DAYS = 7
 DELETE_BATCH_SIZE = 100
 
 
@@ -24,12 +24,12 @@ def run_cleanup(
     raw_payload_retention_days: int | None = None,
 ) -> None:
     client = client or get_supabase_client()
-    work_days = work_retention_days or _env_int("WORK_RETENTION_DAYS", DEFAULT_WORK_RETENTION_DAYS)
-    fetch_run_days = fetch_run_retention_days or _env_int(
+    work_days = _retention_days(work_retention_days, "WORK_RETENTION_DAYS", DEFAULT_WORK_RETENTION_DAYS)
+    fetch_run_days = _retention_days(fetch_run_retention_days,
         "FETCH_RUN_RETENTION_DAYS",
         DEFAULT_FETCH_RUN_RETENTION_DAYS,
     )
-    raw_payload_days = raw_payload_retention_days or _env_int(
+    raw_payload_days = _retention_days(raw_payload_retention_days,
         "RAW_PAYLOAD_RETENTION_DAYS",
         DEFAULT_RAW_PAYLOAD_RETENTION_DAYS,
     )
@@ -137,9 +137,16 @@ def _env_int(name: str, default: int) -> int:
     if not value:
         return default
     try:
-        return int(value)
+        days = int(value)
     except ValueError:
         return default
+    return days if days > 0 else default
+
+
+def _retention_days(explicit: int | None, name: str, default: int) -> int:
+    if explicit is not None:
+        return explicit if isinstance(explicit, int) and not isinstance(explicit, bool) and explicit > 0 else default
+    return _env_int(name, default)
 
 
 def _iso(value: datetime) -> str:

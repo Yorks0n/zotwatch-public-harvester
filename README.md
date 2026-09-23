@@ -529,11 +529,13 @@ To prevent unbounded database growth, the harvester now runs cleanup after each 
 - completed `fetch_runs` older than `FETCH_RUN_RETENTION_DAYS` are deleted
 - `raw_payloads` older than `RAW_PAYLOAD_RETENTION_DAYS` are deleted
 
-Default values:
+Python cleanup defaults (also used by scheduled Actions runs when the optional repository variables are unset or empty):
 
-- `WORK_RETENTION_DAYS=3`
-- `FETCH_RUN_RETENTION_DAYS=3`
-- `RAW_PAYLOAD_RETENTION_DAYS=1`
+- `WORK_RETENTION_DAYS=90`
+- `FETCH_RUN_RETENTION_DAYS=30`
+- `RAW_PAYLOAD_RETENTION_DAYS=7`
+
+Positive integer environment values override these defaults. Invalid or nonpositive values use the Python defaults. Cleanup keeps each source's latest successful coverage run beyond ordinary run-history retention.
 
 The cleanup command can also be run independently:
 
