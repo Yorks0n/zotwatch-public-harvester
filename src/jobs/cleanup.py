@@ -61,12 +61,29 @@ def _delete_old_works(client: Client, *, retention_days: int) -> int:
 
 def _delete_old_fetch_runs(client: Client, *, retention_days: int) -> int:
     cutoff = _iso(datetime.now(UTC) - timedelta(days=retention_days))
+    # Keep the last completed coverage window for every source even when its
+    # recent attempts have failed and the ordinary run history has expired.
+    source_rows = client.table("sources").select("id").execute().data or []
+    latest_success_ids: list[str] = []
+    for source in source_rows:
+        successful = (
+            client.table("fetch_runs")
+            .select("id")
+            .eq("source", source["id"])
+            .eq("status", "success")
+            .order("window_end", desc=True)
+            .limit(1)
+            .execute()
+        ).data or []
+        if successful:
+            latest_success_ids.append(successful[0]["id"])
     return _delete_in_batches(
         client,
         table="fetch_runs",
         timestamp_column="finished_at",
         cutoff=cutoff,
         extra_filters={"status": ["success", "partial_failed", "failed"]},
+        excluded_ids=latest_success_ids,
     )
 
 
@@ -87,6 +104,7 @@ def _delete_in_batches(
     timestamp_column: str,
     cutoff: str,
     extra_filters: dict[str, list[str]] | None = None,
+    excluded_ids: list[str] | None = None,
 ) -> int:
     deleted = 0
     while True:
@@ -98,6 +116,8 @@ def _delete_in_batches(
         )
         for column, values in (extra_filters or {}).items():
             query = query.in_(column, values)
+        if excluded_ids:
+            query = query.not_.in_("id", excluded_ids)
         response = query.execute()
         rows = response.data or []
         if not rows:

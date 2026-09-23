@@ -13,7 +13,9 @@ app = typer.Typer(help="Public literature harvester for ZotWatch.")
 @app.command("harvest-all")
 def harvest_all_command() -> None:
     """Run all enabled incremental harvesters."""
-    run_harvest_all()
+    result = run_harvest_all()
+    if result.status != "success":
+        raise typer.Exit(code=1)
 
 
 @app.command("backfill")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -35,73 +36,123 @@ STALE_RUNNING_THRESHOLD = timedelta(hours=2)
 PAUSED_SOURCES = {"openalex"}
 
 
-def run_harvest_all() -> None:
-    client = get_supabase_client()
-    enabled_sources = {row["id"]: row for row in fetch_enabled_sources(client)}
+@dataclass(frozen=True)
+class HarvestResult:
+    status: str
+    succeeded: tuple[str, ...] = ()
+    failed: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+    orchestration_error: str | None = None
+    cleanup_error: str | None = None
+
+
+def run_harvest_all() -> HarvestResult:
+    try:
+        client = get_supabase_client()
+        enabled_sources = {row["id"]: row for row in fetch_enabled_sources(client)}
+        fetchers = [
+            CrossrefFetcher(),
+            ArxivFetcher(),
+            BioRxivFetcher(),
+            MedRxivFetcher(),
+            OpenAlexFetcher(),
+        ]
+    except Exception as exc:
+        error = _safe_error(exc)
+        _log("harvest", f"orchestration_failed error={error}")
+        return HarvestResult(status="failed", orchestration_error=error)
     _log("harvest", f"enabled_sources={','.join(enabled_sources.keys())}")
-    fetchers = [
-        CrossrefFetcher(),
-        ArxivFetcher(),
-        BioRxivFetcher(),
-        MedRxivFetcher(),
-        OpenAlexFetcher(),
-    ]
+    succeeded: list[str] = []
+    failed: list[str] = []
+    skipped: list[str] = []
     for fetcher in fetchers:
         if fetcher.source_name in PAUSED_SOURCES:
             _log(fetcher.source_name, "skipped paused_source=true")
+            skipped.append(fetcher.source_name)
             continue
 
         source_config = enabled_sources.get(fetcher.source_name)
         if not source_config:
+            skipped.append(fetcher.source_name)
             continue
 
         try:
+            config = source_config.get("config_json") or {}
             if fetcher.source_name == "crossref":
                 _run_crossref_harvest(
                     client=client,
                     fetcher=fetcher,
-                    cursor_key=str(source_config.get("config_json", {}).get("cursor_key", "updated_from")),
+                    cursor_key=str(config.get("cursor_key", "updated_from")),
                 )
+                succeeded.append(fetcher.source_name)
                 continue
 
             if fetcher.source_name == "arxiv":
                 _run_arxiv_harvest(
                     client=client,
                     fetcher=fetcher,
-                    cursor_key=str(source_config.get("config_json", {}).get("cursor_key", "updated_from")),
+                    cursor_key=str(config.get("cursor_key", "updated_from")),
                 )
+                succeeded.append(fetcher.source_name)
                 continue
 
             if fetcher.source_name == "biorxiv":
                 _run_biorxiv_family_harvest(
                     client=client,
                     fetcher=fetcher,
-                    cursor_key=str(source_config.get("config_json", {}).get("cursor_key", "updated_from")),
+                    cursor_key=str(config.get("cursor_key", "updated_from")),
                 )
+                succeeded.append(fetcher.source_name)
                 continue
 
             if fetcher.source_name == "medrxiv":
                 _run_biorxiv_family_harvest(
                     client=client,
                     fetcher=fetcher,
-                    cursor_key=str(source_config.get("config_json", {}).get("cursor_key", "updated_from")),
+                    cursor_key=str(config.get("cursor_key", "updated_from")),
                 )
+                succeeded.append(fetcher.source_name)
                 continue
 
             if fetcher.source_name == "openalex":
                 _run_openalex_harvest(
                     client=client,
                     fetcher=fetcher,
-                    cursor_key=str(source_config.get("config_json", {}).get("cursor_key", "cursor")),
+                    cursor_key=str(config.get("cursor_key", "cursor")),
                 )
+                succeeded.append(fetcher.source_name)
                 continue
 
             if fetcher.source_name not in {"crossref", "arxiv", "biorxiv", "medrxiv", "openalex"}:
                 print(f"skipping unimplemented source {fetcher.source_name}")
                 continue
         except Exception as exc:
-            _log(fetcher.source_name, f"failed error={exc}")
-    run_cleanup(client=client)
+            failed.append(fetcher.source_name)
+            _log(fetcher.source_name, f"failed error={_safe_error(exc)}")
+    cleanup_error = None
+    try:
+        run_cleanup(client=client)
+    except Exception as exc:
+        cleanup_error = _safe_error(exc)
+        _log("cleanup", f"failed error={cleanup_error}")
+    status = "success" if succeeded and not failed and not cleanup_error else (
+        "partial_failed" if succeeded and failed and not cleanup_error else "failed"
+    )
+    result = HarvestResult(
+        status=status,
+        succeeded=tuple(succeeded),
+        failed=tuple(failed),
+        skipped=tuple(skipped),
+        cleanup_error=cleanup_error,
+    )
+    _log("harvest", f"completed status={result.status} succeeded={','.join(succeeded)} "
+         f"failed={','.join(failed)} skipped={','.join(skipped)} cleanup_failed={bool(cleanup_error)}")
+    return result
+
+
+def _safe_error(exc: Exception) -> str:
+    # Avoid persisting response bodies or credentials from upstream exceptions.
+    return type(exc).__name__
 
 
 def _run_crossref_harvest(*, client, fetcher: CrossrefFetcher, cursor_key: str) -> None:
@@ -167,7 +218,7 @@ def _run_crossref_harvest(*, client, fetcher: CrossrefFetcher, cursor_key: str) 
             normalized_count=normalized_count,
             inserted_count=inserted_count,
             updated_count=updated_count,
-            error_summary=str(exc),
+            error_summary=_safe_error(exc),
         )
         _log(fetcher.source_name, f"completed run_id={run_id} status=failed")
         raise
@@ -217,13 +268,6 @@ def _run_openalex_harvest(*, client, fetcher: OpenAlexFetcher, cursor_key: str) 
             fetcher.source_name,
             f"upserted inserted={inserted_count} updated={updated_count} total={result['total']}",
         )
-        upsert_source_cursor(
-            client,
-            source=fetcher.source_name,
-            cursor_key=cursor_key,
-            cursor_value=window_end.date().isoformat(),
-        )
-        _log(fetcher.source_name, f"cursor_updated key={cursor_key}")
         finish_fetch_run(
             client,
             run_id,
@@ -233,6 +277,13 @@ def _run_openalex_harvest(*, client, fetcher: OpenAlexFetcher, cursor_key: str) 
             inserted_count=inserted_count,
             updated_count=updated_count,
         )
+        upsert_source_cursor(
+            client,
+            source=fetcher.source_name,
+            cursor_key=cursor_key,
+            cursor_value=window_end.date().isoformat(),
+        )
+        _log(fetcher.source_name, f"cursor_updated key={cursor_key}")
         _log(fetcher.source_name, f"completed run_id={run_id} status=success")
     except Exception as exc:
         _fail_run(
@@ -242,7 +293,7 @@ def _run_openalex_harvest(*, client, fetcher: OpenAlexFetcher, cursor_key: str) 
             normalized_count=normalized_count,
             inserted_count=inserted_count,
             updated_count=updated_count,
-            error_summary=str(exc),
+            error_summary=_safe_error(exc),
         )
         _log(fetcher.source_name, f"completed run_id={run_id} status=failed")
         raise
@@ -292,13 +343,6 @@ def _run_arxiv_harvest(*, client, fetcher: ArxivFetcher, cursor_key: str) -> Non
             fetcher.source_name,
             f"upserted inserted={inserted_count} updated={updated_count} total={result['total']}",
         )
-        upsert_source_cursor(
-            client,
-            source=fetcher.source_name,
-            cursor_key=cursor_key,
-            cursor_value=window_end.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        )
-        _log(fetcher.source_name, f"cursor_updated key={cursor_key}")
         finish_fetch_run(
             client,
             run_id,
@@ -308,6 +352,13 @@ def _run_arxiv_harvest(*, client, fetcher: ArxivFetcher, cursor_key: str) -> Non
             inserted_count=inserted_count,
             updated_count=updated_count,
         )
+        upsert_source_cursor(
+            client,
+            source=fetcher.source_name,
+            cursor_key=cursor_key,
+            cursor_value=window_end.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        )
+        _log(fetcher.source_name, f"cursor_updated key={cursor_key}")
         _log(fetcher.source_name, f"completed run_id={run_id} status=success")
     except Exception as exc:
         _fail_run(
@@ -317,7 +368,7 @@ def _run_arxiv_harvest(*, client, fetcher: ArxivFetcher, cursor_key: str) -> Non
             normalized_count=normalized_count,
             inserted_count=inserted_count,
             updated_count=updated_count,
-            error_summary=str(exc),
+            error_summary=_safe_error(exc),
         )
         _log(fetcher.source_name, f"completed run_id={run_id} status=failed")
         raise
@@ -367,13 +418,6 @@ def _run_biorxiv_family_harvest(*, client, fetcher: BaseFetcher, cursor_key: str
             fetcher.source_name,
             f"upserted inserted={inserted_count} updated={updated_count} total={result['total']}",
         )
-        upsert_source_cursor(
-            client,
-            source=fetcher.source_name,
-            cursor_key=cursor_key,
-            cursor_value=window_end.date().isoformat(),
-        )
-        _log(fetcher.source_name, f"cursor_updated key={cursor_key}")
         finish_fetch_run(
             client,
             run_id,
@@ -383,6 +427,13 @@ def _run_biorxiv_family_harvest(*, client, fetcher: BaseFetcher, cursor_key: str
             inserted_count=inserted_count,
             updated_count=updated_count,
         )
+        upsert_source_cursor(
+            client,
+            source=fetcher.source_name,
+            cursor_key=cursor_key,
+            cursor_value=window_end.date().isoformat(),
+        )
+        _log(fetcher.source_name, f"cursor_updated key={cursor_key}")
         _log(fetcher.source_name, f"completed run_id={run_id} status=success")
     except Exception as exc:
         _fail_run(
@@ -392,7 +443,7 @@ def _run_biorxiv_family_harvest(*, client, fetcher: BaseFetcher, cursor_key: str
             normalized_count=normalized_count,
             inserted_count=inserted_count,
             updated_count=updated_count,
-            error_summary=str(exc),
+            error_summary=_safe_error(exc),
         )
         _log(fetcher.source_name, f"completed run_id={run_id} status=failed")
         raise

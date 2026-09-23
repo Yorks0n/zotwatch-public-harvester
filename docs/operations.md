@@ -38,8 +38,9 @@ Responsibilities:
 
 ## Failure Policy
 
-- mark run `partial_failed` when at least one source fails but others succeed
-- mark run `failed` when no useful results were persisted
+- each attempted source records its own `success` or `failed` fetch run
+- `harvest-all` reports `partial_failed` when some sources succeed and others fail; it reports `failed` when none succeed or cleanup fails
+- the CLI exits non-zero for both aggregate failure states
 - keep the previous cursor when a run fails before persistence completes
 - surface failure summaries in `fetch_runs.error_summary`
 

@@ -222,13 +222,15 @@ class CrossrefH1Tests(unittest.TestCase):
         self.assertEqual(db.cursor_writes, 1)
 
     def test_public_v1_contract_files_untouched(self):
-        # H1 exercises ingestion only; guard the checked-in API definitions.
+        # H2 may extend operational status; candidate payload contracts stay fixed.
         from pathlib import Path
         import subprocess
 
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
-            ["git", "diff", "--quiet", "2a02181d7c87e89bd75cdbb11b4bc9f277bb7c25", "--", "supabase/functions", "supabase/migrations"],
+            ["git", "diff", "--quiet", "2a02181d7c87e89bd75cdbb11b4bc9f277bb7c25", "--",
+             "supabase/functions/public-candidates-v1", "supabase/functions/public-candidates-incremental-v1",
+             "supabase/functions/public-work-v1", "supabase/migrations"],
             cwd=root, check=False,
         )
         self.assertEqual(result.returncode, 0)

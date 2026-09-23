@@ -71,10 +71,10 @@ Returns source freshness and recent run status.
 
 ### Response fields
 
-- per-source last successful fetch timestamp
-- most recent run status
-- current covered freshness window
-- current work counts
+- `sources[].latest_run`: the latest attempt, including its status and window
+- `sources[].last_successful_run`: the completed run with the greatest successful `window_end`, or `null`
+- `sources[].freshness`: `state` (`covered` or `no_success`), factual `fresh_through`, and `lag_seconds`; no fixed fresh/stale threshold is applied
+- `works_total`: current work count
 
 ## `GET /functions/v1/public-work-v1`
 
