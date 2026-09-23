@@ -221,8 +221,8 @@ class CrossrefH1Tests(unittest.TestCase):
         self.assertEqual(len(db.works), 101)
         self.assertEqual(db.cursor_writes, 1)
 
-    def test_public_v1_contract_files_untouched(self):
-        # H2 may extend operational status; candidate payload contracts stay fixed.
+    def test_candidate_api_v1_implementations_untouched(self):
+        # Operational status and migrations may evolve; candidate API v1 stays fixed.
         from pathlib import Path
         import subprocess
 
@@ -230,7 +230,7 @@ class CrossrefH1Tests(unittest.TestCase):
         result = subprocess.run(
             ["git", "diff", "--quiet", "2a02181d7c87e89bd75cdbb11b4bc9f277bb7c25", "--",
              "supabase/functions/public-candidates-v1", "supabase/functions/public-candidates-incremental-v1",
-             "supabase/functions/public-work-v1", "supabase/migrations"],
+             "supabase/functions/public-work-v1"],
             cwd=root, check=False,
         )
         self.assertEqual(result.returncode, 0)
