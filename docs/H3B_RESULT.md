@@ -1,77 +1,202 @@
-# H3B 本地结果草稿 — 待审阅，未部署
+# H3 final result: public harvester production contract
 
-基线：`H3A_MAIN=2808c005c8ea53d64df2a1c249d344e8235264c1`。本分支 `h3b/retention-facets` 仅处理 H3A 已证实的留存默认值冲突和 facet 截断。**本文件是本地验收草稿；没有应用生产迁移，也没有部署 H3B Edge Function。**
+Final classification: **H3 overall = FINAL PASS** for the current
+recent-candidate product contract. The production code baseline for this seal is
+`H3_SAMPLE_MAIN=5ed7319c276124a880d54d80d470095cc4d9bb68`. This document
+supersedes the earlier local H3B draft in this file; it does not erase the
+historical audit or failed performance evidence.
 
-## 前置发布核验
+The previously observed large-scale candidate API timeout remains a **known
+capacity limitation**. It is **DEFERRED / OUT OF CURRENT PRODUCT SCOPE**, because
+the current production contract uses bounded recent-candidate sampling and
+does not require large-scale historical candidate traversal. Neither that
+timeout nor the large-scale facet performance issue has been fixed by the
+clean-data rollout.
 
-- 已将 `H2_MAIN=d5a393862d1453df6486ce59116b817e8534939a` 推送到 `origin/main`，并确认既有 `H2_MAIN` tag 精确指向该 SHA 后推送 tag；未移动 `H1_MAIN`。
-- H2 推送后，从 H2 `main` 重跑 Python 18 项、Node 3 项、编译、差异检查，均通过。部署 run [35817031012](https://github.com/Yorks0n/zotwatch-public-harvester/actions/runs/35817031012) 首次有一个 matrix job 因 Supabase CLI `latest` 解析遇速率限制失败，重跑失败 job 后 run 的 attempt 2 全部成功。
-- 线上 `public-status-v1` HTTP 200；来源字段同时包含 `latest_run`、`last_successful_run`、`freshness`，保留原字段。
-- 已推送 `h3a/production-audit`；该分支相对 H2 只有一个提交，唯一文件是 `docs/H3A_AUDIT.md`。已快进合并并推送 `origin/main`。合并后 Python 18 项、Node 3 项、编译与 diff 检查通过，工作区干净，远端 `main` 精确为 `H3A_MAIN`。自动审批拒绝额外创建和推送 `H3A_MAIN` tag（用户仅要求记录 SHA），因此此名称在本文件中是提交记录，**不是 Git tag**。
+## Accepted production contract
 
-## 本地变更
-
-### 留存默认值
-
-- `src/jobs/cleanup.py` 的唯一默认数值改为 `works=90`、`fetch_runs=30`、`raw_payloads=7` 天；显式正整数参数和环境变量仍可覆盖。
-- 空、非法、零或负数环境值回落到 Python 默认值，避免意外的立即删除。`.github/workflows/harvest.yml` 仅转发可选仓库变量，不再独立维护三组数值；变量未设置时传空值，由 Python 使用默认值。README 说明了默认值和覆盖机制。
-- 未改变已观测的生产定时运行有效值 `90/30/7`。H2 的每来源最后成功覆盖 run 保护逻辑未改。
-- 这些值覆盖当前 30 天 `last_seen_at` 视图、受支持的 7 天请求窗口和目标每 6 小时采集节奏；**不构成任何具体停机或重放容忍承诺**，因为没有文档化的相关 SLA。
-
-### Facet SQL 与 Edge
-
-- 新增迁移 `20260923000000_candidate_facets_rpc.sql`：`public.api_candidate_facets_v1()` 从 `public.api_candidates_v1` 在 PostgreSQL 内聚合，返回原有 JSON 形状。空集合返回零与空对象。函数为 `SECURITY INVOKER`，固定 `search_path = pg_catalog, public`，无动态 SQL；撤销 `PUBLIC`、`anon`、`authenticated` 执行权，仅授予 `service_role` 执行权。既有候选视图及可见性条件未改。
-- `public-candidate-facets-v1` 只调用该 RPC，并核验返回形状、非负安全整数以及各维度总和。RPC 不可用、权限错误、抛错或结果不完整时返回 HTTP 500，不读取候选行，也不回退到旧的 1,000 行计数代码。成功响应字段仍是 `totals.all/preprint/published`、`sources`、`candidate_types`、`candidate_groups`。
-- `public-candidates-v1`、`public-candidates-incremental-v1`、`public-work-v1` 和候选字段形状未改。
-
-## 本地验收证据
-
-| 门禁 | 结果 |
+| Area | Current contract |
 | --- | --- |
-| Python `unittest discover -s tests -q` | PASS，22 项（含 H1/H2 全部测试） |
-| `npm test` | PASS，10 项（含 H2 3 项） |
-| SQL RPC 在 PGlite / PostgreSQL 17.5 执行 | PASS：空集合、1,510 条候选、首 1,000 条之后才出现的分组、全部分组和、权限与 invoker |
-| Edge RPC 合同测试 | PASS：成功形状、RPC 错误/缺失/畸形结果失败关闭、无行读取回退 |
-| Python 编译、Node TS 语法、`git diff --check` | PASS |
-| 与 `H3A_MAIN` 比较候选 API v1、work API v1、既有候选视图迁移 | PASS，未改变 |
+| Crossref | Recent sampled feed; at most 1,000 records per harvest; one request/page, sorted by Crossref `indexed` timestamp descending; lookback limited to the later of the previous sample time and 24 hours ago. `freshness.state=sampled` means the last successful sample time, **not** complete coverage of the filtered window. |
+| arXiv | Normal recent incremental source. |
+| bioRxiv / medRxiv | Temporarily, explicitly `enabled=false` in production after persistent upstream HTTP 200 responses with empty or non-JSON bodies. Disabled sources are skipped; an enabled source that fails is failed. Existing failed runs and works remain; neither source had a cursor at the disable check, and no cursor was created. They are not permanently in `PAUSED_SOURCES` and may be re-enabled after upstream recovery. |
+| OpenAlex | Paused under the existing policy; skipped during harvest. |
+| Retention | `works=90`, `fetch_runs=30`, `raw_payloads=7` days. |
+| Candidate APIs | Current recent-candidate workload and clean-scale production health are supported. There is no acceptance guarantee for arbitrary >100k full-dataset traversal or large-scale analytics. The existing candidate API code, filters, exact-count behavior, and visibility semantics were not changed during the sampling rollout. |
+| Facets | Correctness **PASS** through exact database-side aggregation and fail-closed Edge behavior; large-scale performance is a **DEFERRED KNOWN ISSUE**. |
 
-PGlite 无 `pgcrypto` 扩展，因此无法在该本地运行时重放仓库最初迁移链；测试在真实 PostgreSQL 17.5 引擎中建立同名候选视图与角色，直接执行**完整的新迁移 SQL**。生产迁移历史、角色和现有视图仍须在部署前 dry-run 与部署后核验。本地测试不能替代生产核验。
+The product supplies a limited pool of recent candidate papers to ZotWatch.
+It does not mirror all of Crossref and does not need to scan hundreds of
+thousands of historical candidates. ZotWatch consumes recent candidates,
+not a large historical analytics database. **H1 full-pagination completeness
+is historical, superseded behavior; it is not the current production
+Crossref contract.** The H1 result document remains a record of that earlier
+implementation and its tests.
 
-## 经审阅后拟执行的生产顺序（目前未执行）
+## Chronology and evidence
 
-下面的命令以已审阅的 H3B 分支或提交为工作目录，且环境中已安全提供 `SUPABASE_ACCESS_TOKEN`、`SUPABASE_PROJECT_REF` 等必要凭据；不在日志或文档中输出其值。**在迁移完成并验证之前，不合并或推送含新 Edge Function 的提交到 `main`**，因为现有 `deploy-functions.yml` 会在 main push 时自动部署函数。
+### H3A: production audit
 
-1. 确认目标项目与待应用迁移：
+The [H3A read-only audit](H3A_AUDIT.md) found inconsistent retention
+authorities: Python defaults were 3/3/1 days while the scheduled workflow
+effectively used 90/30/7. It confirmed OpenAlex disabled with no fetch runs,
+and identified a correctness defect in facets: the Edge implementation
+aggregated only the first 1,000 returned rows while the candidate view held
+15,521. The production facet response reported 1,000, undercounting by
+14,521. The audit made no production changes.
 
-   ```bash
-   supabase link --project-ref "$SUPABASE_PROJECT_REF"
-   supabase db push --linked --dry-run
-   ```
+### H3B: retention and facet correctness
 
-   人工核对 dry-run 只包含预期的 `20260923000000_candidate_facets_rpc.sql`；若另有未应用迁移，停止并先查明历史。
+H3B made Python's canonical retention defaults 90/30/7 days and made the
+workflow pass optional overrides to those defaults. The
+`20260923000000_candidate_facets_rpc.sql` migration added
+`public.api_candidate_facets_v1()`: an exact aggregation over
+`public.api_candidates_v1`, with `SECURITY INVOKER`, a fixed search path,
+and execution restricted to `service_role`. The facet Edge Function calls
+that RPC, validates the response, and fails closed on missing, malformed, or
+failed results; it does not fall back to fetching 1,000 candidate rows.
+Candidate visibility and the core candidate APIs were unchanged.
 
-2. **先应用 SQL**：
+Before production migration, the local/remote migration lists disagreed
+on `20260401023000_pause_openalex_source.sql`: its effect was already
+present in production but its remote history entry was absent. The official
+`supabase migration repair 20260401023000 --status applied --linked`
+reconciled **history only**; it did not rerun the source update. A following
+dry run listed only the facet RPC migration. The facet migration was then
+applied to production and the versioned facet Edge Function deployed.
+Production exact facet correctness was confirmed against independent
+database-side candidate counts and group totals, including a 176,042-candidate
+measurement. The stale H1 guard test was corrected to protect the unchanged
+candidate APIs rather than require the superseded Crossref pagination.
+H3B correctness and its final code gates passed.
 
-   ```bash
-   supabase db push --linked
-   ```
+### Facet performance: retained failure evidence
 
-3. 在数据库/REST 中核验函数存在、`SECURITY INVOKER`、固定 search path、SQL 仅引用 `public.api_candidates_v1`；`has_function_privilege('anon'...)` 和 `('authenticated'...)` 为 false，`('service_role'...)` 为 true，`PUBLIC` 无 EXECUTE。分别使用匿名/已认证客户端确认直接 RPC 调用被拒绝；使用服务角色调用 RPC，比较 `totals.all` 与候选视图的数据库端 `count(*)`、各组之和以及空值规则。只保存聚合数值，不保存候选行或凭据。任何核验失败都停止，不部署 Edge。
+The deployed exact RPC had a separate large-scale performance problem.
+At 176,042 candidates, the original RPC produced two `57014` failures in
+five sequential service-role calls; successful calls reached 8.884 seconds.
+An `EXPLAIN (ANALYZE, BUFFERS, SETTINGS)` execution took 7,994.059 ms and
+spilled temporary pages. These are genuine failures, not a correctness PASS
+for large-scale latency.
 
-4. **再部署 Edge**：
+The read-only PERF2 `GROUPING SETS` candidate matched the exact result and
+reduced one plan's execution to 2,231.689 ms without observed spill. Yet
+five sequential management-path SELECTs still took 4.764–9.985 seconds.
+PERF3 simulated the 8-second PostgreSQL statement timeout under
+`service_role`; its first SELECT failed with SQLSTATE `57014` and the
+remaining attempts were stopped. **The optimization was not deployed.**
+The original diagnostic, PERF2 benchmark, and PERF3 failure reports remain
+preserved; facet large-scale performance is deferred.
 
-   ```bash
-   supabase functions deploy public-candidate-facets-v1 --project-ref "$SUPABASE_PROJECT_REF" --no-verify-jwt
-   ```
+### Crossref incident and contract change
 
-   立即以现有 publishable-key 边界调用端点，核对 HTTP 200 的完整响应与数据库端 RPC/精确候选计数相等；还应检查错误路径为 HTTP 500。最后才合并并推送 H3B 到 `main`，并复核自动部署与定时运行的留存参数仍是 `90/30/7`。
+The exhaustive H1 Crossref implementation proved operationally unsuitable.
+A cancelled run had already processed **506 pages / 50,600 records**, while
+Crossref reported a much larger matching population. The high write volume
+also expanded the candidate data set and refreshed many `updated_at`
+values. This led to an explicit contract change from full-window completeness
+to a bounded recent sample, rather than describing a partial exhaustive run
+as covered.
 
-## 故障与回退顺序
+[PR #1](https://github.com/Yorks0n/zotwatch-public-harvester/pull/1)
+contains three preserved commits:
 
-- 如果迁移后、Edge 部署前验证失败：**不要部署 Edge**。旧端点仍有已知截断问题，不把它称为正确回退；停止发布并修复迁移或阻断 facet 使用。
-- 如果新 Edge 上线后验证失败：保持新 Edge 的失败关闭语义。必要时在数据库执行 `REVOKE EXECUTE ON FUNCTION public.api_candidate_facets_v1() FROM service_role;`，让 RPC 调用失败、端点返回 HTTP 500；**不重新部署旧的 1,000 行实现**。修复后先重新授予 `service_role` EXECUTE 并验证 RPC，再验证 Edge。此撤权动作只属于经审阅后的生产故障响应，本地阶段不执行。
-- 只要已部署 Edge 仍调用 RPC，就**不删除 RPC**。未来若要移除它，先部署并验证不依赖该 RPC 且保持失败关闭的 Edge 版本，再撤权并 `DROP FUNCTION public.api_candidate_facets_v1()`。任何数据库对象删除均需另行审阅。
+1. `10929098209d61fc18e016223c22b531d324cde2` — one-page Crossref
+   sampling of at most 1,000 recently indexed works and public
+   `freshness.state=sampled`.
+2. `22a4ffc361fddd56ced9240a97e04e98bd7e5fcb` — bounded retries for
+   bioRxiv/medRxiv empty or non-JSON responses, `UpstreamUnavailableError`,
+   and correct 30-record details-endpoint pagination. A malformed response
+   is not treated as an empty collection.
+3. `5ed7319c276124a880d54d80d470095cc4d9bb68` — restored H2 aggregate
+   failure semantics: enabled unavailable sources fail, later sources are
+   still attempted, cursors do not advance on failure, and persisted
+   `error_summary` contains only the exception class.
 
-## 停止点
+### Controlled data reset and rollout
 
-H3B 目前只完成本地实现、测试和部署草案。**未应用生产迁移、未部署 H3B Edge、未更改生产留存值或 Actions 变量。等待明确审阅后再执行生产动作；H3B 尚未完成。**
+With the old scheduled harvest disabled and no harvest active, one authorized
+reset truncated only rebuildable harvester data:
+`work_aliases`, `raw_payloads`, `fetch_runs`, `source_cursors`, and
+`works`. Schema, migration history, SQL functions, views, permissions,
+`sources` configuration, and indexes were retained. Pre-reset aggregate
+counts and source/cursor summaries were recorded separately; no paper rows
+were saved as a recovery source.
+
+The `sampled` status semantics were deployed before a bounded production
+harvest. That first sample fetched 1,000 Crossref records, inserted 1,000,
+and reported `coverage=sampled`. bioRxiv and medRxiv continued to return
+HTTP 200 with empty or non-JSON bodies. They were explicitly disabled in
+`public.sources`, preserving historical failed runs and existing works;
+the read-only check found no cursor for either source. The clean-scale
+health gate then passed: each candidate endpoint returned HTTP 200 on
+five of five sequential calls at 3,896 candidates, with no visible new
+`57014` in the checked Postgres log window.
+
+PR #1 was marked Ready, then `main` was fast-forwarded from
+`5067a70abf2a8adaa75f26517383c2fb0290c4e9` to the exact approved
+`5ed7319c276124a880d54d80d470095cc4d9bb68` without rewriting any
+reviewed commit. GitHub reports PR #1 merged at that same SHA. The
+[automatic deployment](https://github.com/Yorks0n/zotwatch-public-harvester/actions/runs/35965289377)
+was green for all five versioned public functions, including
+`public-status-v1`. After three more sequential HTTP 200 calls to each
+core candidate endpoint and a clear visible `57014` log check, the
+`Harvest Public Sources` workflow was re-enabled.
+
+### Official main harvest and post-harvest health
+
+The single [manual main harvest run
+35965579959](https://github.com/Yorks0n/zotwatch-public-harvester/actions/runs/35965579959)
+checked out the approved `main` SHA and completed successfully:
+
+| Source | Outcome |
+| --- | --- |
+| Crossref | Success: fetched 1,000; inserted 999; updated 0; one-page recent indexed sample; `coverage=sampled`. |
+| arXiv | Success; 0 new records in that window. |
+| bioRxiv | Skipped because explicitly disabled; no new failed fetch run. |
+| medRxiv | Skipped because explicitly disabled; no new failed fetch run. |
+| OpenAlex | Skipped under existing paused policy. |
+| Aggregate | `status=success`; `failed=` empty. |
+| Cleanup | Effective `work_retention_days=90`, `fetch_run_retention_days=30`, `raw_payload_retention_days=7`. |
+
+After that run, `public-status-v1` still showed Crossref as `sampled`
+and both preprint sources as `enabled=false`. The candidate view held
+**4,895** rows: **896 arXiv** and **3,999 Crossref**. The normal and
+incremental candidate endpoints both returned HTTP 200 with valid
+`data`/`paging` payloads. The checked Postgres log window had no
+**visible** new `57014` or statement-timeout message; log ingestion may
+lag. These clean-scale observations do not establish large-scale capacity.
+The rollout's post-main gates passed: Python **32/32**, Node **11/11**,
+Python compile, Node/TypeScript syntax checks, and `git diff --check`.
+
+### H3C: candidate API capacity boundary
+
+The earlier approximately 176,000-candidate data set produced real
+Postgres `57014` timeouts in both core candidate APIs. The read-only
+diagnosis identified exact-count scans plus row queries ordered or
+filtered by `updated_at`, with no usable `updated_at` index. Removing
+exact count alone was not demonstrated sufficient: one normal row-only
+server-side plan reached approximately **7.58 seconds** against an
+8-second API timeout. No index or Edge change was made. The later 3,896
+and 4,895-candidate health checks establish the current operating
+baseline only; they do **not** repair or disprove the large-scale failure.
+
+H3C large-scale candidate API scalability is formally
+**DEFERRED / OUT OF CURRENT PRODUCT SCOPE**. Revisit it if the supported
+product changes to require exhaustive Crossref collection, >100k candidate
+traversal, or large-scale analytics. Do not interpret this deferral as an
+H3C performance PASS.
+
+## Final classification
+
+| Track | Final state |
+| --- | --- |
+| H1 historical full-pagination behavior | **SUPERSEDED** by bounded sampled Crossref contract |
+| H2 aggregate/freshness semantics | **FINAL PASS** |
+| H3A retention/facet audit | **FINAL PASS** |
+| H3B retention + facet correctness | **FINAL PASS** |
+| Crossref bounded sampling rollout | **FINAL PASS** |
+| bioRxiv / medRxiv upstream incident | **CONTAINED** by explicit temporary disable |
+| Facet large-scale performance | **DEFERRED KNOWN ISSUE** |
+| H3C large-scale candidate scalability | **DEFERRED / OUT OF CURRENT PRODUCT SCOPE** |
+| H3 overall, under the current product contract | **FINAL PASS** |
