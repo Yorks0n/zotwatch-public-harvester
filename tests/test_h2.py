@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import httpx
+
 from src.fetchers.http import UpstreamUnavailableError
 from typer.testing import CliRunner
 
@@ -45,8 +47,8 @@ class H2Tests(unittest.TestCase):
         def run_source(*, fetcher, **_kwargs):
             attempted.append(fetcher.source_name)
             if fetcher.source_name in failures:
-                if fetcher.source_name == "biorxiv":
-                    raise UpstreamUnavailableError("biorxiv unavailable")
+                if fetcher.source_name in {"biorxiv", "medrxiv"}:
+                    raise UpstreamUnavailableError(f"{fetcher.source_name} unavailable")
                 raise RuntimeError("private upstream detail")
 
         def cleanup(*, client):
@@ -77,12 +79,76 @@ class H2Tests(unittest.TestCase):
         self.assertEqual(result.succeeded, ("arxiv", "biorxiv"))
         self.assertEqual(attempted, ["crossref", "arxiv", "biorxiv"])
 
-    def test_optional_preprint_source_failure_is_warning_and_does_not_fail_run(self):
-        result, attempted = self.invoke(["crossref", "biorxiv", "arxiv"], failures={"biorxiv"})
+    def test_enabled_preprint_source_failure_is_partial_failure(self):
+        result, attempted = self.invoke(["crossref", "biorxiv", "medrxiv"], failures={"biorxiv"})
+        self.assertEqual(result.status, "partial_failed")
+        self.assertEqual(result.failed, ("biorxiv",))
+        self.assertNotIn("biorxiv", result.skipped)
+        self.assertEqual(result.succeeded, ("crossref", "medrxiv"))
+        self.assertEqual(attempted, ["crossref", "biorxiv", "medrxiv"])
+
+    def test_both_enabled_preprint_sources_fail_without_hiding_failure(self):
+        result, attempted = self.invoke(
+            ["crossref", "arxiv", "biorxiv", "medrxiv"],
+            failures={"biorxiv", "medrxiv"},
+        )
+        self.assertEqual(result.status, "partial_failed")
+        self.assertEqual(result.succeeded, ("crossref", "arxiv"))
+        self.assertEqual(result.failed, ("biorxiv", "medrxiv"))
+        self.assertEqual(result.skipped, ("openalex",))
+        self.assertEqual(attempted, ["crossref", "arxiv", "biorxiv", "medrxiv"])
+
+    def test_disabled_preprint_source_is_skipped_without_attempt(self):
+        result, attempted = self.invoke(["crossref", "medrxiv"])
         self.assertEqual(result.status, "success")
         self.assertEqual(result.failed, ())
-        self.assertEqual(result.skipped, ("biorxiv",))
-        self.assertEqual(attempted, ["crossref", "biorxiv", "arxiv"])
+        self.assertIn("biorxiv", result.skipped)
+        self.assertEqual(attempted, ["crossref", "medrxiv"])
+
+    def test_failed_preprint_run_keeps_cursor_and_error_summary_opaque(self):
+        db = MultiSourceDatabase()
+        db.cursors[("biorxiv", "updated_from")] = "2026-09-23"
+        attempted = []
+        responses = []
+        real_client = httpx.Client
+
+        def upstream(_request: httpx.Request) -> httpx.Response:
+            responses.append(1)
+            return httpx.Response(200, headers={"content-type": "application/json"},
+                                  text="<html>secret upstream content</html>")
+
+        def successful_source(*, fetcher, **_kwargs):
+            attempted.append(fetcher.source_name)
+
+        with patch.object(harvest_all, "get_supabase_client", return_value=db), patch.object(
+            harvest_all, "fetch_enabled_sources",
+            return_value=[{"id": name} for name in ("crossref", "biorxiv", "medrxiv")]
+        ), patch.object(harvest_all, "_run_crossref_harvest", side_effect=successful_source), patch.object(
+            harvest_all, "_run_biorxiv_family_harvest", wraps=harvest_all._run_biorxiv_family_harvest
+        ), patch.object(harvest_all.MedRxivFetcher, "fetch", side_effect=lambda _window: attempted.append("medrxiv") or []
+        ), patch("src.fetchers.biorxiv.httpx.Client",
+                 side_effect=lambda **kwargs: real_client(transport=httpx.MockTransport(upstream), **kwargs)
+        ), patch("src.fetchers.http.time.sleep"), patch.object(
+            harvest_all, "run_cleanup"
+        ), patch("builtins.print") as output:
+            result = harvest_all.run_harvest_all()
+
+        self.assertEqual(result.status, "partial_failed")
+        self.assertEqual(result.failed, ("biorxiv",))
+        self.assertNotIn("biorxiv", result.skipped)
+        self.assertEqual(attempted, ["crossref", "medrxiv"])
+        self.assertEqual(len(responses), 4)
+        failed = next(run for run in db.runs if run["source"] == "biorxiv")
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["error_summary"], "UpstreamUnavailableError")
+        self.assertEqual(db.cursors[("biorxiv", "updated_from")], "2026-09-23")
+        self.assertNotIn("secret upstream content", str(failed["error_summary"]))
+        self.assertNotIn("<html>", str(failed["error_summary"]))
+        self.assertNotIn("body_prefix", str(failed["error_summary"]))
+        log = "\n".join(str(call) for call in output.call_args_list)
+        self.assertNotIn("secret upstream content", log)
+        self.assertNotIn("<html>", log)
+        self.assertNotIn("body_prefix", log)
 
     def test_all_fail_and_zero_attempts_fail(self):
         result, attempted = self.invoke(["crossref", "arxiv"], failures={"crossref", "arxiv"})

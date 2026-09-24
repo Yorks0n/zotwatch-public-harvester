@@ -38,7 +38,7 @@ def _fetch_biorxiv_family(*, server: str, window: FetchWindow) -> list[dict[str,
             except (InvalidJsonResponseError, UpstreamUnavailableError, ValueError, httpx.HTTPStatusError,
                     httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
                 raise UpstreamUnavailableError(
-                    f"{server} details fetch failed cursor={cursor}: {exc}"
+                    f"{server} details fetch failed cursor={cursor} cause={type(exc).__name__}"
                 ) from exc
             if not isinstance(payload, dict):
                 raise UpstreamUnavailableError(

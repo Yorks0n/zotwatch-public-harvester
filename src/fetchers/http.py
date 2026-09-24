@@ -56,9 +56,8 @@ def get_json_with_retries(
     """Fetch and decode JSON, retrying transient HTTP and malformed-body errors.
 
     Some upstream gateways return an HTML error page or an empty body with a
-    successful status.  Treating that as an empty result would silently lose
-    source data, so parsing failures are retried and then raised with safe
-    response metadata.
+    successful status. Treating that as an empty result would silently lose
+    source data, so parsing failures are retried and then raised.
     """
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
@@ -71,11 +70,10 @@ def get_json_with_retries(
             try:
                 return response.json()
             except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
-                preview = response.text[:200].replace("\n", " ").replace("\r", " ")
                 last_error = InvalidJsonResponseError(
                     f"{context} returned non-JSON response status={response.status_code} "
                     f"content_type={response.headers.get('content-type', '')!r} "
-                    f"bytes={len(response.content)} body_prefix={preview!r}"
+                    f"bytes={len(response.content)}"
                 )
                 if attempt >= attempts:
                     raise last_error from exc

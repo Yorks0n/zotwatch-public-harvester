@@ -45,6 +45,19 @@ class BiorxivFetcherTests(unittest.TestCase):
         self.assertEqual(rows, [{"doi": "10.1/a"}])
         self.assertEqual(calls, 2)
 
+    def test_retries_empty_json_response_then_succeeds(self):
+        calls = 0
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return httpx.Response(200, headers={"content-type": "application/json"}, content=b"")
+            return httpx.Response(200, json=payload([{"doi": "10.1/a"}], 1))
+
+        self.assertEqual(self.fetch_with(handler), [{"doi": "10.1/a"}])
+        self.assertEqual(calls, 2)
+
     def test_page_cursor_uses_details_endpoint_page_size(self):
         requests: list[str] = []
 
@@ -61,15 +74,18 @@ class BiorxivFetcherTests(unittest.TestCase):
             "/details/biorxiv/2026-09-23/2026-09-24/30/json",
         ])
 
-    def test_non_json_after_retries_has_safe_diagnostics(self):
+    def test_non_json_after_retries_has_no_response_body_in_error(self):
         def handler(_request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, text="<html>bad gateway</html>")
 
         with self.assertRaises(UpstreamUnavailableError) as raised:
             self.fetch_with(handler)
-        self.assertIn("biorxiv details cursor=0", str(raised.exception))
-        self.assertIn("status=200", str(raised.exception))
-        self.assertIn("body_prefix='<html>bad gateway</html>'", str(raised.exception))
+        self.assertIn("biorxiv details fetch failed cursor=0", str(raised.exception))
+        self.assertNotIn("<html>", str(raised.exception))
+        self.assertIsNotNone(raised.exception.__cause__)
+        self.assertIn("status=200", str(raised.exception.__cause__))
+        self.assertNotIn("body_prefix", str(raised.exception.__cause__))
+        self.assertNotIn("<html>", str(raised.exception.__cause__))
 
 
 if __name__ == "__main__":
