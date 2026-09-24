@@ -6,6 +6,8 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 
+import httpx
+
 from src.db.client import get_supabase_client
 from src.db.queries import default_window_start
 from src.db.queries import fetch_enabled_sources
@@ -22,6 +24,8 @@ from src.fetchers.base import BaseFetcher
 from src.fetchers.base import FetchWindow
 from src.fetchers.biorxiv import BioRxivFetcher
 from src.fetchers.crossref import CrossrefFetcher
+from src.fetchers.http import InvalidJsonResponseError
+from src.fetchers.http import UpstreamUnavailableError
 from src.fetchers.medrxiv import MedRxivFetcher
 from src.fetchers.openalex import OpenAlexFetcher
 from src.jobs.cleanup import run_cleanup
@@ -34,6 +38,7 @@ from src.normalize.models import NormalizedWork
 
 STALE_RUNNING_THRESHOLD = timedelta(hours=2)
 PAUSED_SOURCES = {"openalex"}
+OPTIONAL_UPSTREAM_SOURCES = {"biorxiv", "medrxiv"}
 CROSSREF_SAMPLE_LOOKBACK = timedelta(days=1)
 
 
@@ -128,8 +133,16 @@ def run_harvest_all() -> HarvestResult:
                 print(f"skipping unimplemented source {fetcher.source_name}")
                 continue
         except Exception as exc:
-            failed.append(fetcher.source_name)
-            _log(fetcher.source_name, f"failed error={_safe_error(exc)}")
+            error = _safe_error(exc)
+            if fetcher.source_name in OPTIONAL_UPSTREAM_SOURCES and _is_upstream_unavailable(exc):
+                skipped.append(fetcher.source_name)
+                _log(
+                    fetcher.source_name,
+                    f"warning unavailable error={error} continuing=true",
+                )
+            else:
+                failed.append(fetcher.source_name)
+                _log(fetcher.source_name, f"failed error={error}")
     cleanup_error = None
     try:
         run_cleanup(client=client)
@@ -152,8 +165,21 @@ def run_harvest_all() -> HarvestResult:
 
 
 def _safe_error(exc: Exception) -> str:
-    # Avoid persisting response bodies or credentials from upstream exceptions.
+    # Keep generic errors opaque; bounded source diagnostics are safe to retain.
+    if isinstance(exc, InvalidJsonResponseError):
+        return str(exc)
+    if isinstance(exc, UpstreamUnavailableError):
+        return str(exc)
     return type(exc).__name__
+
+
+def _is_upstream_unavailable(exc: Exception) -> bool:
+    return isinstance(
+        exc,
+        (
+            UpstreamUnavailableError,
+        ),
+    )
 
 
 def _run_crossref_harvest(*, client, fetcher: CrossrefFetcher, cursor_key: str) -> None:

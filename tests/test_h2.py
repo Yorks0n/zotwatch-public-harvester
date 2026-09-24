@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+from src.fetchers.http import UpstreamUnavailableError
 from typer.testing import CliRunner
 
 from src.main import app
@@ -44,6 +45,8 @@ class H2Tests(unittest.TestCase):
         def run_source(*, fetcher, **_kwargs):
             attempted.append(fetcher.source_name)
             if fetcher.source_name in failures:
+                if fetcher.source_name == "biorxiv":
+                    raise UpstreamUnavailableError("biorxiv unavailable")
                 raise RuntimeError("private upstream detail")
 
         def cleanup(*, client):
@@ -73,6 +76,13 @@ class H2Tests(unittest.TestCase):
         self.assertEqual(result.failed, ("crossref",))
         self.assertEqual(result.succeeded, ("arxiv", "biorxiv"))
         self.assertEqual(attempted, ["crossref", "arxiv", "biorxiv"])
+
+    def test_optional_preprint_source_failure_is_warning_and_does_not_fail_run(self):
+        result, attempted = self.invoke(["crossref", "biorxiv", "arxiv"], failures={"biorxiv"})
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.failed, ())
+        self.assertEqual(result.skipped, ("biorxiv",))
+        self.assertEqual(attempted, ["crossref", "biorxiv", "arxiv"])
 
     def test_all_fail_and_zero_attempts_fail(self):
         result, attempted = self.invoke(["crossref", "arxiv"], failures={"crossref", "arxiv"})
