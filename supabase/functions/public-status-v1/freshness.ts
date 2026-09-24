@@ -32,7 +32,7 @@ export function sourceRunStatus(runs: Run[], nowMs: number) {
       latest_run: latestRun,
       last_successful_run: lastSuccessfulRun,
       freshness: {
-        state: freshThrough === null ? "no_success" : "covered",
+        state: freshThrough === null ? "no_success" : sourceId === "crossref" ? "sampled" : "covered",
         fresh_through: freshThrough,
         lag_seconds: lagSeconds,
       },

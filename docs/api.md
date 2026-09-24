@@ -73,7 +73,7 @@ Returns source freshness and recent run status.
 
 - `sources[].latest_run`: the latest attempt, including its status and window
 - `sources[].last_successful_run`: the completed run with the greatest successful `window_end`, or `null`
-- `sources[].freshness`: `state` (`covered` or `no_success`), factual `fresh_through`, and `lag_seconds`; no fixed fresh/stale threshold is applied
+- `sources[].freshness`: `state` (`covered`, `sampled`, or `no_success`), `fresh_through`, and `lag_seconds`; no fixed fresh/stale threshold is applied. Crossref uses `sampled`: at most 1,000 indexed-descending records per run, so its timestamp is the latest sample time rather than complete window coverage. Other successful sources use `covered`.
 - `works_total`: current work count
 
 ## `GET /functions/v1/public-work-v1`

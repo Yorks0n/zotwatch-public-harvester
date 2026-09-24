@@ -109,10 +109,11 @@ class H2Tests(unittest.TestCase):
         db = h1.FakeDatabase()
         before = db.cursor
         with self.assertRaises(RuntimeError):
-            h1.CrossrefH1Tests().run_window(db, [[h1.work(i) for i in range(100)], RuntimeError("private upstream detail")])
+            with patch.object(harvest_all, "upsert_works", side_effect=RuntimeError("private persistence detail")):
+                h1.CrossrefH1Tests().run_window(db, [h1.work(i) for i in range(100)])
         self.assertEqual(db.runs[0]["status"], "failed")
         self.assertEqual(db.runs[0]["fetched_count"], 100)
-        self.assertEqual(db.runs[0]["inserted_count"], 100)
+        self.assertEqual(db.runs[0]["inserted_count"], 0)
         self.assertEqual(db.runs[0]["error_summary"], "RuntimeError")
         self.assertEqual(db.cursor, before)
 
@@ -120,14 +121,10 @@ class H2Tests(unittest.TestCase):
         db = MultiSourceDatabase()
         original_cursor = db.cursors[("crossref", "updated_from")]
 
-        def pages(_self, _window):
-            yield [h1.work(1)]
-            raise RuntimeError("private upstream detail")
-
         with patch.object(harvest_all, "get_supabase_client", return_value=db), patch.object(
             harvest_all, "fetch_enabled_sources", return_value=[{"id": "crossref"}, {"id": "arxiv"}]
         ), patch.object(harvest_all, "datetime", h1.FixedDatetime), patch.object(
-            harvest_all.CrossrefFetcher, "iter_pages", pages
+            harvest_all.CrossrefFetcher, "fetch", side_effect=RuntimeError("private upstream detail")
         ), patch.object(harvest_all.ArxivFetcher, "fetch", return_value=[]), patch.object(
             harvest_all, "run_cleanup"
         ):
@@ -136,7 +133,7 @@ class H2Tests(unittest.TestCase):
         self.assertEqual([(run["source"], run["status"]) for run in db.runs],
                          [("crossref", "failed"), ("arxiv", "success")])
         self.assertEqual(db.runs[0]["error_summary"], "RuntimeError")
-        self.assertEqual(db.runs[0]["inserted_count"], 1)
+        self.assertEqual(db.runs[0]["inserted_count"], 0)
         self.assertEqual(db.cursors[("crossref", "updated_from")], original_cursor)
         self.assertEqual(db.cursors[("arxiv", "updated_from")], "2026-03-02T00:00:00Z")
 

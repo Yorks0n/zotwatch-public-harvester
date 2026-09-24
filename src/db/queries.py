@@ -38,7 +38,7 @@ def default_window_start(hours: int = 24) -> datetime:
 def fetch_running_runs(client: Client, source: str) -> list[dict[str, object]]:
     response = (
         client.table("fetch_runs")
-        .select("id,source,status,started_at,finished_at")
+        .select("id,source,status,triggered_by,started_at,finished_at")
         .eq("source", source)
         .eq("status", "running")
         .order("started_at", desc=True)

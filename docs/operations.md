@@ -33,6 +33,7 @@ Responsibilities:
 - repeated windows must not create duplicates
 - writes should use upserts, not insert-only behavior
 - every run must record fetch metadata
+- Crossref is intentionally bounded to one recent, indexed-descending sample of at most 1,000 records; its cursor is the last sample time, not a completeness watermark
 - backfill jobs must be separate from routine harvest jobs
 - raw payload retention must be bounded
 
@@ -42,6 +43,7 @@ Responsibilities:
 - `harvest-all` reports `partial_failed` when some sources succeed and others fail; it reports `failed` when none succeed or cleanup fails
 - the CLI exits non-zero for both aggregate failure states
 - keep the previous cursor when a run fails before persistence completes
+- report successful Crossref freshness as `sampled`; do not interpret its time range as exhaustive coverage
 - surface failure summaries in `fetch_runs.error_summary`
 
 ## Downstream Contract

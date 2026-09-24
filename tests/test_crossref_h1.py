@@ -22,30 +22,29 @@ def work(number: int, *, doi: str | None = None) -> dict[str, object]:
 
 
 class CrossrefServer:
-    def __init__(self, pages: list[list[dict[str, object]] | Exception | httpx.Response], *, final_cursor: bool = True):
-        self.pages = pages
-        self.final_cursor = final_cursor
+    def __init__(self, page: list[dict[str, object]] | Exception | httpx.Response):
+        self.page = page
         self.requests: list[dict[str, str]] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         params = dict(request.url.params)
         self.requests.append(params)
-        page_index = 0 if params["cursor"] == "*" else int(params["cursor"].removeprefix("cursor-"))
-        if params["rows"] != "100" or params["mailto"] != "test@example.org":
+        if (params.get("rows") != "1000" or params.get("mailto") != "test@example.org"
+                or params.get("sort") != "indexed" or params.get("order") != "desc"
+                or "cursor" in params):
             raise AssertionError(f"request parameters changed: {params}")
         if params["filter"] != "from-index-date:2026-03-01T00:00:00,until-index-date:2026-03-02T00:00:00":
             raise AssertionError(f"window changed: {params['filter']}")
-        if page_index >= len(self.pages):
-            raise AssertionError("unexpected Crossref request")
-        page = self.pages[page_index]
+        if len(self.requests) > 1 and not isinstance(self.page, Exception) and not (
+            isinstance(self.page, httpx.Response) and self.page.status_code >= 400
+        ):
+            raise AssertionError("sample requested more than one page")
+        page = self.page
         if isinstance(page, Exception):
             raise page
         if isinstance(page, httpx.Response):
             return page
-        message: dict[str, object] = {"items": page}
-        if page_index < len(self.pages) - 1 or self.final_cursor:
-            message["next-cursor"] = f"cursor-{page_index + 1}"
-        return httpx.Response(200, json={"message": message})
+        return httpx.Response(200, json={"message": {"items": page}})
 
 
 class FakeTable:
@@ -135,8 +134,8 @@ class FixedDatetime(datetime):
 
 
 class CrossrefH1Tests(unittest.TestCase):
-    def run_window(self, db: FakeDatabase, pages: list[list[dict[str, object]] | Exception | httpx.Response], *, final_cursor: bool = True) -> CrossrefServer:
-        server = CrossrefServer(pages, final_cursor=final_cursor)
+    def run_window(self, db: FakeDatabase, page: list[dict[str, object]] | Exception | httpx.Response) -> CrossrefServer:
+        server = CrossrefServer(page)
         real_client = httpx.Client
         with patch.dict(os.environ, {"CROSSREF_MAILTO": "test@example.org"}), patch("src.fetchers.http.time.sleep"), patch.object(
             harvest_all, "datetime", FixedDatetime
@@ -144,65 +143,71 @@ class CrossrefH1Tests(unittest.TestCase):
             harvest_all._run_crossref_harvest(client=db, fetcher=CrossrefFetcher(), cursor_key="updated_from")
         return server
 
-    def test_more_than_100_and_final_partial_page(self):
+    def test_recent_sample_is_one_sorted_page_of_at_most_1000(self):
         db = FakeDatabase()
-        server = self.run_window(db, [[work(i) for i in range(100)], [work(i) for i in range(100, 125)]])
-        self.assertEqual([request["cursor"] for request in server.requests], ["*", "cursor-1"])
-        self.assertEqual(len(db.works), 125)
-        self.assertEqual(db.runs[0]["fetched_count"], 125)
+        server = self.run_window(db, [work(i) for i in range(1000)])
+        self.assertEqual(len(server.requests), 1)
+        self.assertEqual(server.requests[0]["rows"], "1000")
+        self.assertEqual(server.requests[0]["sort"], "indexed")
+        self.assertEqual(server.requests[0]["order"], "desc")
+        self.assertEqual(len(db.works), 1000)
+        self.assertEqual(db.runs[0]["fetched_count"], 1000)
         self.assertEqual(db.runs[0]["status"], "success")
         self.assertEqual(db.cursor_writes, 1)
         self.assertEqual(db.cursor, "2026-03-02T00:00:00Z")
 
-    def test_full_pages_then_empty_page(self):
+    def test_short_sample_and_empty_sample(self):
         db = FakeDatabase()
-        server = self.run_window(db, [[work(i) for i in range(100)], [work(i) for i in range(100, 200)], []])
-        self.assertEqual([request["cursor"] for request in server.requests], ["*", "cursor-1", "cursor-2"])
-        self.assertEqual(len(db.works), 200)
-        self.assertEqual(db.runs[0]["fetched_count"], 200)
+        self.run_window(db, [work(i) for i in range(25)])
+        self.assertEqual(len(db.works), 25)
+        empty_db = FakeDatabase()
+        self.run_window(empty_db, [])
+        self.assertEqual(empty_db.runs[0]["fetched_count"], 0)
+        self.assertEqual(empty_db.runs[0]["status"], "success")
 
-    def test_full_final_page_without_next_cursor(self):
+    def test_stale_cursor_limits_filter_to_one_day(self):
         db = FakeDatabase()
-        server = self.run_window(db, [[work(i) for i in range(100)]], final_cursor=False)
-        self.assertEqual(len(server.requests), 1)
-        self.assertEqual(db.cursor_writes, 1)
+        db.cursor = "2026-02-01T00:00:00Z"
+        server = self.run_window(db, [work(1)])
+        self.assertEqual(server.requests[0]["filter"],
+                         "from-index-date:2026-03-01T00:00:00,until-index-date:2026-03-02T00:00:00")
+        self.assertEqual(db.runs[0]["window_start"], "2026-03-01T00:00:00Z")
 
-    def test_page_two_failure_and_replay(self):
+    def test_http_failure_preserves_sample_watermark_and_replays(self):
         db = FakeDatabase()
         before = db.cursor
         with self.assertRaises(httpx.HTTPStatusError):
-            self.run_window(db, [[work(i) for i in range(100)], httpx.Response(503)])
-        self.assertEqual(len(db.works), 100)
+            self.run_window(db, httpx.Response(503))
+        self.assertEqual(len(db.works), 0)
         self.assertEqual(db.runs[0]["status"], "failed")
         self.assertEqual(db.cursor, before)
         self.assertEqual(db.cursor_writes, 0)
-        self.run_window(db, [[work(i) for i in range(100)], [work(i) for i in range(100, 120)]])
-        self.assertEqual(len(db.works), 120)
+        self.run_window(db, [work(i) for i in range(20)])
+        self.assertEqual(len(db.works), 20)
         self.assertEqual(db.runs[1]["inserted_count"], 20)
-        self.assertEqual(db.runs[1]["updated_count"], 100)
         self.assertEqual(db.cursor_writes, 1)
 
-    def test_timeout_after_multiple_pages_and_replay_with_duplicate_doi(self):
+    def test_timeout_preserves_sample_watermark(self):
         db = FakeDatabase()
-        pages = [[work(i) for i in range(100)], [work(i) for i in range(100, 200)]]
         with self.assertRaises(httpx.ReadTimeout):
-            self.run_window(db, pages + [httpx.ReadTimeout("timed out")])
-        self.assertEqual(len(db.works), 200)
+            self.run_window(db, httpx.ReadTimeout("timed out"))
         self.assertEqual(db.runs[0]["status"], "failed")
         self.assertEqual(db.cursor_writes, 0)
-        replay = pages + [[work(200), work(201, doi="HTTPS://DOI.ORG/10.1234/1")]]
-        self.run_window(db, replay)
-        self.assertEqual(len(db.works), 201)
-        self.assertEqual(db.cursor_writes, 1)
-        self.assertEqual(db.runs[1]["status"], "success")
 
-    def test_partial_persisted_rows_replay_without_duplicates(self):
+    def test_sample_replay_without_duplicates(self):
         db = FakeDatabase()
         db.works[("crossref", "10.1234/0")] = {"source": "crossref", "source_identifier": "10.1234/0"}
-        self.run_window(db, [[work(i) for i in range(120)][:100], [work(i) for i in range(100, 120)]])
+        self.run_window(db, [work(i) for i in range(120)])
         self.assertEqual(len(db.works), 120)
         self.assertEqual(db.runs[0]["inserted_count"], 119)
         self.assertEqual(db.runs[0]["updated_count"], 1)
+
+    def test_invalid_sample_rejected_without_watermark(self):
+        db = FakeDatabase()
+        with self.assertRaises(ValueError):
+            self.run_window(db, httpx.Response(200, json={"message": {"items": "invalid"}}))
+        self.assertEqual(db.runs[0]["status"], "failed")
+        self.assertEqual(db.cursor_writes, 0)
 
     def test_process_interruption_stale_run_replays_persisted_rows(self):
         db = FakeDatabase()
@@ -214,11 +219,24 @@ class CrossrefH1Tests(unittest.TestCase):
             db.works[("crossref", f"10.1234/{i}")] = {
                 "source": "crossref", "source_identifier": f"10.1234/{i}",
             }
-        self.run_window(db, [[work(i) for i in range(100)], [work(100)]])
+        self.run_window(db, [work(i) for i in range(101)])
         self.assertEqual(db.runs[0]["status"], "failed")
         self.assertEqual(db.runs[1]["status"], "success")
         self.assertEqual(db.runs[1]["inserted_count"], 1)
         self.assertEqual(len(db.works), 101)
+        self.assertEqual(db.cursor_writes, 1)
+
+    def test_cancelled_actions_run_is_recovered_before_next_serial_job(self):
+        db = FakeDatabase()
+        db.runs.append({
+            "id": "run-1", "source": "crossref", "status": "running",
+            "triggered_by": "github_actions", "started_at": "2026-03-01T23:50:00Z",
+            "finished_at": None,
+        })
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+            self.run_window(db, [work(1)])
+        self.assertEqual(db.runs[0]["status"], "failed")
+        self.assertEqual(db.runs[1]["status"], "success")
         self.assertEqual(db.cursor_writes, 1)
 
     def test_candidate_api_v1_implementations_untouched(self):

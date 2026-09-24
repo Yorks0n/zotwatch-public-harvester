@@ -8,14 +8,14 @@ const run = (source, status, started_at, window_end) => ({
   window_start: "2026-03-01T00:00:00Z", window_end,
 });
 
-test("failed latest attempt retains successful coverage and factual lag", () => {
+test("failed latest attempt retains the last successful Crossref sample", () => {
   const successful = run("crossref", "success", "2026-03-02T00:00:00Z", "2026-03-02T00:00:00Z");
   const failed = run("crossref", "failed", "2026-03-02T12:00:00Z", "2026-03-02T12:00:00Z");
   const status = sourceRunStatus([successful, failed], now)("crossref");
   assert.equal(status.latest_run, failed);
   assert.equal(status.last_successful_run, successful);
   assert.deepEqual(status.freshness, {
-    state: "covered", fresh_through: "2026-03-02T00:00:00Z", lag_seconds: 86400,
+    state: "sampled", fresh_through: "2026-03-02T00:00:00Z", lag_seconds: 86400,
   });
 });
 
@@ -30,10 +30,18 @@ test("no prior successful run is explicitly unknown", () => {
   });
 });
 
-test("successful coverage follows maximum completed window, not latest attempt", () => {
+test("latest successful sample follows maximum completed window, not latest attempt", () => {
   const status = sourceRunStatus([
     run("crossref", "success", "2026-03-02T12:00:00Z", "2026-03-01T12:00:00Z"),
     run("crossref", "success", "2026-03-02T00:00:00Z", "2026-03-02T00:00:00Z"),
   ], now)("crossref");
   assert.equal(status.freshness.fresh_through, "2026-03-02T00:00:00Z");
+  assert.equal(status.freshness.state, "sampled");
+});
+
+test("complete-window sources still report covered freshness", () => {
+  const status = sourceRunStatus([
+    run("arxiv", "success", "2026-03-02T00:00:00Z", "2026-03-02T00:00:00Z"),
+  ], now)("arxiv");
+  assert.equal(status.freshness.state, "covered");
 });

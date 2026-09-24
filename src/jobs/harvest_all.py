@@ -34,6 +34,7 @@ from src.normalize.models import NormalizedWork
 
 STALE_RUNNING_THRESHOLD = timedelta(hours=2)
 PAUSED_SOURCES = {"openalex"}
+CROSSREF_SAMPLE_LOOKBACK = timedelta(days=1)
 
 
 @dataclass(frozen=True)
@@ -158,11 +159,12 @@ def _safe_error(exc: Exception) -> str:
 def _run_crossref_harvest(*, client, fetcher: CrossrefFetcher, cursor_key: str) -> None:
     window_end = datetime.now(UTC)
     cursor_value = get_source_cursor(client, fetcher.source_name, cursor_key=cursor_key)
-    window_start = (
+    prior_cursor = (
         datetime.fromisoformat(cursor_value.replace("Z", "+00:00"))
         if cursor_value
         else default_window_start()
     )
+    window_start = max(prior_cursor, window_end - CROSSREF_SAMPLE_LOOKBACK)
     run_id = _prepare_fetch_run(
         client=client,
         source=fetcher.source_name,
@@ -179,20 +181,21 @@ def _run_crossref_harvest(*, client, fetcher: CrossrefFetcher, cursor_key: str) 
     inserted_count = 0
     updated_count = 0
     try:
-        for page in fetcher.iter_pages(FetchWindow(start=window_start, end=window_end, cursor=cursor_value)):
-            fetched_count += len(page)
-            normalized = [_normalize_crossref_item(item) for item in page]
-            valid_normalized = [item for item in normalized if item is not None]
-            deduped = dedupe_works(valid_normalized)
-            result = upsert_works(client, deduped)
-            normalized_count += len(deduped)
-            inserted_count += result["inserted"]
-            updated_count += result["updated"]
-            _log(
-                fetcher.source_name,
-                f"page fetched={len(page)} filtered={len(page) - len(valid_normalized)} "
-                f"deduped={len(deduped)} inserted={result['inserted']} updated={result['updated']}",
-            )
+        sample = fetcher.fetch(FetchWindow(start=window_start, end=window_end))
+        fetched_count = len(sample)
+        normalized = [_normalize_crossref_item(item) for item in sample]
+        valid_normalized = [item for item in normalized if item is not None]
+        deduped = dedupe_works(valid_normalized)
+        result = upsert_works(client, deduped)
+        normalized_count = len(deduped)
+        inserted_count = result["inserted"]
+        updated_count = result["updated"]
+        _log(
+            fetcher.source_name,
+            f"sampled fetched={len(sample)} limit={fetcher.sample_size} "
+            f"filtered={len(sample) - len(valid_normalized)} deduped={len(deduped)} "
+            f"inserted={inserted_count} updated={updated_count} coverage=sampled",
+        )
         finish_fetch_run(
             client,
             run_id,
@@ -747,6 +750,7 @@ def _prepare_fetch_run(*, client, source: str, window_start: datetime, window_en
         str(run["id"])
         for run in running_runs
         if _is_stale_running_run(_optional_str(run.get("started_at")))
+        or (_triggered_by() == "github_actions" and run.get("triggered_by") == "github_actions")
     ]
     if stale_run_ids:
         _log(source, f"mark_stale_failed count={len(stale_run_ids)}")

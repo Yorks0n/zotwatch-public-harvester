@@ -138,7 +138,7 @@ python -m src.main cleanup
 
 The current implementation runs:
 
-- `crossref`: incremental fetch by `from-index-date`
+- `crossref`: at most 1,000 recently indexed works per run, sorted by Crossref `indexed` time descending; the filter starts at the later of the previous sample timestamp and 24 hours ago. This is a **sample**, not complete coverage of all Crossref changes in the window.
 - `arxiv`: incremental fetch by `submittedDate` window
 - `biorxiv`: incremental fetch by date-window details API
 - `medrxiv`: incremental fetch by date-window details API
@@ -285,6 +285,8 @@ Authorization: Bearer <SUPABASE_PUBLISHABLE_KEY>
 - `GET /public-work-v1`: fetch one work by `id` or `doi`
 - `GET /public-candidate-facets-v1`: discover available sources and candidate type distribution
 - `GET /public-status-v1`: inspect source freshness and latest harvest state
+
+For Crossref, `freshness.state` is `sampled` after a successful run and `fresh_through` is the latest sample timestamp. It does not assert complete Crossref coverage. Other sources retain `covered` for successful window runs.
 
 ### `GET /public-candidates-v1`
 
