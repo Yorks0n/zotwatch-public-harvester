@@ -564,3 +564,5 @@ This repository currently contains:
 - GitHub Actions scaffolding for harvesting and function deployment
 
 The next major area of work is downstream candidate quality: stronger filtering, cross-source merge policy, and a tighter public API surface for consumers.
+
+历史实施与验收记录见[文档归档](docs/archive/README.md)；归档中的阶段状态不代表当前部署状态。

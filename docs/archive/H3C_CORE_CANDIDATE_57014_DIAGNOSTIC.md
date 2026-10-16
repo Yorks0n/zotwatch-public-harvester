@@ -1,3 +1,5 @@
+> 历史归档：本文保留对应阶段的计划或验收事实，不代表当前部署状态或待办事项。
+
 # H3C core candidate API timeout diagnosis
 
 Date: 2026-09-24 UTC. Branch base: `main` at

@@ -1,0 +1,9 @@
+# 历史开发文档归档
+
+这些文档保留当时的范围、提交和验收事实，不代表当前上线状态或待办清单。
+
+- [H1_RESULT](H1_RESULT.md)
+- [H2_RESULT](H2_RESULT.md)
+- [H3A_AUDIT](H3A_AUDIT.md)
+- [H3B_RESULT](H3B_RESULT.md)
+- [H3C_CORE_CANDIDATE_57014_DIAGNOSTIC](H3C_CORE_CANDIDATE_57014_DIAGNOSTIC.md)

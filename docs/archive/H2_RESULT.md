@@ -1,3 +1,5 @@
+> 历史归档：本文保留对应阶段的计划或验收事实，不代表当前部署状态或待办事项。
+
 # H2 result: aggregate harvest status and source freshness
 
 ## Checkpoint and scope
